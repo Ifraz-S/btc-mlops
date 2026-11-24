@@ -28,9 +28,9 @@ spec:
         fsGroup: 1000
       containers:
         - name: api
-          # Replace YOUR_DOCKERHUB_USERNAME (or use btc-forecast-api:local with
+          # Replace ifrazs (or use btc-forecast-api:local with
           # "kind load docker-image", see the guide).
-          image: YOUR_DOCKERHUB_USERNAME/btc-forecast-api:latest
+          image: ifrazs/btc-forecast-api:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

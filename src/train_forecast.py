@@ -15,12 +15,12 @@ Run it directly:  python src/train_forecast.py
 """
 
 import json
+import pickle
 import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor
@@ -39,6 +39,19 @@ def new_model() -> MultiOutputRegressor:
         max_iter=200, learning_rate=0.05, max_depth=4, l2_regularization=1.0, random_state=42
     )
     return MultiOutputRegressor(base)
+
+
+def save_model_file(obj, path) -> None:
+    """Save the model bundle with Python's built-in C pickler.
+
+    Airflow imports the 'dill' library, which changes the pure-Python pickler
+    that joblib.dump uses. A model saved that way inside Airflow can only be
+    loaded where dill is installed, and the API container doesn't have it.
+    The C pickler (pickle.dump) is not affected by dill, and joblib.load in the
+    API reads these files normally.
+    """
+    with open(path, "wb") as f:
+        pickle.dump(obj, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 def regression_metrics(actual: np.ndarray, predicted: np.ndarray) -> dict:
@@ -112,7 +125,7 @@ def train_and_evaluate(
 
     model_dir = Path(model_dir)
     model_dir.mkdir(parents=True, exist_ok=True)
-    joblib.dump(bundle, model_dir / CANDIDATE_MODEL)
+    save_model_file(bundle, model_dir / CANDIDATE_MODEL)
     (model_dir / CANDIDATE_METRICS).write_text(json.dumps(report, indent=2))
     print(json.dumps({k: report[k] for k in ("model_version", "metrics", "passed_threshold")}))
     return report
@@ -128,8 +141,11 @@ def register_model(model_dir: Path = config.MODEL_DIR, force: bool = False) -> b
     report = json.loads((model_dir / CANDIDATE_METRICS).read_text())
     first_model = not (model_dir / "model.joblib").exists()
     if report["passed_threshold"] or force or first_model:
-        shutil.copy(model_dir / CANDIDATE_MODEL, model_dir / "model.joblib")
-        shutil.copy(model_dir / CANDIDATE_METRICS, model_dir / "metrics.json")
+        # copyfile copies only the contents. shutil.copy would also try to copy
+        # file permissions, which fails on Windows/Docker shared folders when
+        # the existing file was created by a different user.
+        shutil.copyfile(model_dir / CANDIDATE_MODEL, model_dir / "model.joblib")
+        shutil.copyfile(model_dir / CANDIDATE_METRICS, model_dir / "metrics.json")
         print(f"Registered model {report['model_version']}")
         return True
     print(f"Model {report['model_version']} NOT registered (MAPE above threshold)")
