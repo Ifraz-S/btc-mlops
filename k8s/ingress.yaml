@@ -1,0 +1,22 @@
+# Ingress: routes http://btc-forecast.local to the ClusterIP service.
+# Needs the NGINX Ingress Controller installed, and this line in your hosts file:
+#   127.0.0.1 btc-forecast.local
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: btc-forecast-ingress
+  labels:
+    app: btc-forecast-api
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: btc-forecast.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: btc-forecast-api
+                port:
+                  number: 80

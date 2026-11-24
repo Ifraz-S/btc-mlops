@@ -1,0 +1,72 @@
+# Deployment: keeps 3 identical copies (pods) of the API running at all times.
+# If a pod crashes or is deleted, Kubernetes starts a new one automatically.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: btc-forecast-api
+  labels:
+    app: btc-forecast-api
+spec:
+  replicas: 3
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: btc-forecast-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: btc-forecast-api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: api
+          # Replace YOUR_DOCKERHUB_USERNAME (or use btc-forecast-api:local with
+          # "kind load docker-image", see the guide).
+          image: YOUR_DOCKERHUB_USERNAME/btc-forecast-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 5000
+          envFrom:
+            - configMapRef:
+                name: btc-api-config
+            - secretRef:
+                name: btc-api-secret
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:         # "is it frozen?" -> restart the container
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:        # "is it ready?" -> only then send it traffic
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: models
+              mountPath: /app/models
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: btc-models-pvc

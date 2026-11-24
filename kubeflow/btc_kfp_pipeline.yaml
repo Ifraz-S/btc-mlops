@@ -1,0 +1,277 @@
+# PIPELINE DEFINITION
+# Name: btc-forecast-training-pipeline
+# Description: Ingest BTC-USD prices, engineer features, train a 7-day forecaster
+# Inputs:
+#    horizon: int [Default: 7.0]
+#    start_date: str [Default: '2018-01-01']
+#    ticker: str [Default: 'BTC-USD']
+components:
+  comp-build-features:
+    executorLabel: exec-build-features
+    inputDefinitions:
+      artifacts:
+        raw_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        horizon:
+          parameterType: NUMBER_INTEGER
+    outputDefinitions:
+      artifacts:
+        features:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-ingest-data:
+    executorLabel: exec-ingest-data
+    inputDefinitions:
+      parameters:
+        start_date:
+          parameterType: STRING
+        ticker:
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        raw_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-train-model:
+    executorLabel: exec-train-model
+    inputDefinitions:
+      artifacts:
+        features:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        horizon:
+          parameterType: NUMBER_INTEGER
+    outputDefinitions:
+      artifacts:
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-build-features:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - build_features
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'pandas==2.2.3'\
+          \ 'numpy==1.26.4' 'scikit-learn==1.5.2' 'joblib==1.4.2'  &&  python3 -m\
+          \ pip install --quiet --no-warn-script-location 'kfp==2.18.2' '--no-deps'\
+          \ 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\
+          \n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef build_features(raw_data: Input[Dataset], horizon: int, features:\
+          \ Output[Dataset]):\n    \"\"\"Compute returns, moving-average ratios, volatility\
+          \ and 1..N day targets.\"\"\"\n    import numpy as np\n    import pandas\
+          \ as pd\n\n    df = pd.read_csv(raw_data.path, parse_dates=[\"Date\"]).drop_duplicates(\"\
+          Date\")\n    close = df[\"Close\"].astype(float).reset_index(drop=True)\n\
+          \    ret = close.pct_change()\n    out = df[[\"Date\", \"Close\"]].reset_index(drop=True)\n\
+          \    for i in range(1, 8):\n        out[f\"ret_lag_{i}\"] = ret.shift(i\
+          \ - 1)\n    out[\"ma_7_ratio\"] = close / close.rolling(7).mean()\n    out[\"\
+          ma_30_ratio\"] = close / close.rolling(30).mean()\n    out[\"volatility_7\"\
+          ] = ret.rolling(7).std()\n    out[\"volatility_30\"] = ret.rolling(30).std()\n\
+          \    out[\"momentum_7\"] = close / close.shift(7) - 1\n    for h in range(1,\
+          \ horizon + 1):\n        out[f\"target_{h}\"] = close.shift(-h) / close\
+          \ - 1\n    out = out.replace([np.inf, -np.inf], np.nan).dropna(subset=[\"\
+          volatility_30\", \"ret_lag_7\"])\n    out.to_csv(features.path, index=False)\n\
+          \    features.metadata[\"rows\"] = len(out)\n\n"
+        image: python:3.10-slim
+    exec-ingest-data:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - ingest_data
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'pandas==2.2.3'\
+          \ 'numpy==1.26.4' 'scikit-learn==1.5.2' 'joblib==1.4.2' 'yfinance>=0.2.54'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.18.2'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef ingest_data(ticker: str, start_date: str, raw_data: Output[Dataset]):\n\
+          \    \"\"\"Download daily OHLCV prices from Yahoo Finance.\"\"\"\n    import\
+          \ pandas as pd\n    import yfinance as yf\n\n    df = yf.download(ticker,\
+          \ start=start_date, interval=\"1d\", progress=False, auto_adjust=False)\n\
+          \    if isinstance(df.columns, pd.MultiIndex):\n        df.columns = df.columns.get_level_values(0)\n\
+          \    df = df.reset_index()[[\"Date\", \"Open\", \"High\", \"Low\", \"Close\"\
+          , \"Volume\"]]\n    df = df.dropna(subset=[\"Close\"]).sort_values(\"Date\"\
+          )\n    df.to_csv(raw_data.path, index=False)\n    raw_data.metadata[\"rows\"\
+          ] = len(df)\n    raw_data.metadata[\"last_date\"] = str(df[\"Date\"].iloc[-1])[:10]\n\
+          \n"
+        image: python:3.10-slim
+    exec-train-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'pandas==2.2.3'\
+          \ 'numpy==1.26.4' 'scikit-learn==1.5.2' 'joblib==1.4.2'  &&  python3 -m\
+          \ pip install --quiet --no-warn-script-location 'kfp==2.18.2' '--no-deps'\
+          \ 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\
+          \n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train_model(\n    features: Input[Dataset],\n    horizon: int,\n\
+          \    model: Output[Model],\n    metrics: Output[Metrics],\n):\n    \"\"\"\
+          Backtest on the last N days, then train the final model and save it.\"\"\
+          \"\n    import joblib\n    import numpy as np\n    import pandas as pd\n\
+          \    from sklearn.ensemble import HistGradientBoostingRegressor\n    from\
+          \ sklearn.multioutput import MultiOutputRegressor\n\n    df = pd.read_csv(features.path,\
+          \ parse_dates=[\"Date\"])\n    fcols = [f\"ret_lag_{i}\" for i in range(1,\
+          \ 8)] + [\n        \"ma_7_ratio\",\n        \"ma_30_ratio\",\n        \"\
+          volatility_7\",\n        \"volatility_30\",\n        \"momentum_7\",\n \
+          \   ]\n    tcols = [f\"target_{h}\" for h in range(1, horizon + 1)]\n  \
+          \  labelled = df.dropna(subset=tcols).reset_index(drop=True)\n\n    def\
+          \ make():\n        return MultiOutputRegressor(\n            HistGradientBoostingRegressor(\n\
+          \                max_iter=200, learning_rate=0.05, max_depth=4, l2_regularization=1.0\n\
+          \            )\n        )\n\n    origin = len(labelled) - 1\n    train =\
+          \ labelled.iloc[: origin - horizon + 1]\n    m = make().fit(train[fcols],\
+          \ train[tcols])\n    row = labelled.iloc[[origin]]\n    base = float(row[\"\
+          Close\"].iloc[0])\n    pred = base * (1 + m.predict(row[fcols])[0])\n  \
+          \  actual = base * (1 + row[tcols].to_numpy()[0])\n    err = pred - actual\n\
+          \n    metrics.log_metric(\"mae\", float(np.mean(np.abs(err))))\n    metrics.log_metric(\"\
+          rmse\", float(np.sqrt(np.mean(err**2))))\n    metrics.log_metric(\"mape\"\
+          , float(np.mean(np.abs(err / actual)) * 100))\n\n    final = make().fit(labelled[fcols],\
+          \ labelled[tcols])\n    joblib.dump(\n        {\n            \"model\":\
+          \ final,\n            \"feature_columns\": fcols,\n            \"horizon\"\
+          : horizon,\n            \"last_date\": str(df[\"Date\"].iloc[-1])[:10],\n\
+          \            \"recent_closes\": df[\"Close\"].tail(60).round(2).tolist(),\n\
+          \        },\n        model.path,\n    )\n    model.metadata[\"framework\"\
+          ] = \"scikit-learn\"\n\n"
+        image: python:3.10-slim
+        resources:
+          cpuLimit: 1.0
+          memoryLimit: 1.0
+          resourceCpuLimit: '1'
+          resourceMemoryLimit: 1G
+pipelineInfo:
+  description: Ingest BTC-USD prices, engineer features, train a 7-day forecaster
+  name: btc-forecast-training-pipeline
+root:
+  dag:
+    tasks:
+      build-features:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-build-features
+        dependentTasks:
+        - ingest-data
+        inputs:
+          artifacts:
+            raw_data:
+              taskOutputArtifact:
+                outputArtifactKey: raw_data
+                producerTask: ingest-data
+          parameters:
+            horizon:
+              componentInputParameter: horizon
+        taskInfo:
+          name: Feature engineering
+      ingest-data:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-ingest-data
+        inputs:
+          parameters:
+            start_date:
+              componentInputParameter: start_date
+            ticker:
+              componentInputParameter: ticker
+        taskInfo:
+          name: Ingest BTC data
+      train-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-model
+        dependentTasks:
+        - build-features
+        inputs:
+          artifacts:
+            features:
+              taskOutputArtifact:
+                outputArtifactKey: features
+                producerTask: build-features
+          parameters:
+            horizon:
+              componentInputParameter: horizon
+        taskInfo:
+          name: Train & evaluate
+  inputDefinitions:
+    parameters:
+      horizon:
+        defaultValue: 7.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      start_date:
+        defaultValue: '2018-01-01'
+        isOptional: true
+        parameterType: STRING
+      ticker:
+        defaultValue: BTC-USD
+        isOptional: true
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.18.2

@@ -1,0 +1,29 @@
+# Horizontal Pod Autoscaler: adds pods when average CPU use goes above 60% of
+# the requested CPU (100m), removes them when load drops. 2 to 8 pods.
+# Needs metrics-server installed in the cluster (see the guide).
+# Memory is not used as a scaling metric: each pod needs more than its 128Mi
+# request just to load pandas/scikit-learn, so a memory target would keep the
+# HPA permanently at maxReplicas. CPU is the signal that tracks real load.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: btc-forecast-api-hpa
+  labels:
+    app: btc-forecast-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: btc-forecast-api
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 60   # scale down after 1 min of low load (default 5)

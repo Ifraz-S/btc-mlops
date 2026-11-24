@@ -1,0 +1,107 @@
+# =============================================================================
+# Local test environment: Flask API + Airflow (webserver, scheduler) + Postgres
+#
+#   docker compose up -d --build     start everything (first time takes a while)
+#   docker compose ps                see what is running
+#   docker compose logs -f api       follow the API logs
+#   docker compose down              stop everything
+#
+# Then open:
+#   http://localhost:5000/health     Flask API
+#   http://localhost:8080            Airflow UI (user: airflow, password: airflow)
+#
+# ./data and ./models are shared folders: Airflow writes the new model there,
+# the API reads it from there.
+# =============================================================================
+
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: airflow/Dockerfile
+  image: btc-airflow:local
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__WEBSERVER__SECRET_KEY: local-dev-secret
+    # settings read by our DAG / src code
+    PYTHONPATH: /opt/airflow
+    DATA_DIR: /opt/airflow/data
+    MODEL_DIR: /opt/airflow/models
+    BTC_API_URL: http://api:5000
+    API_TOKEN: ${API_TOKEN:-local-dev-token}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./src:/opt/airflow/src
+    - ./data:/opt/airflow/data
+    - ./models:/opt/airflow/models
+    - ./tests:/opt/airflow/tests
+    - airflow-logs:/opt/airflow/logs
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 10
+
+  # One-off job: creates Airflow's database tables and the admin user, then exits.
+  airflow-init:
+    <<: *airflow-common
+    command: version
+    environment:
+      <<: *airflow-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: airflow
+      _AIRFLOW_WWW_USER_PASSWORD: airflow
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  api:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    image: btc-forecast-api:local
+    ports:
+      - "5000:5000"
+    environment:
+      MODEL_DIR: /app/models
+      MODEL_STAGE: local
+      LOG_LEVEL: INFO
+      API_TOKEN: ${API_TOKEN:-local-dev-token}
+    volumes:
+      - ./models:/app/models
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  airflow-logs:

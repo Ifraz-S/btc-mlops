@@ -1,0 +1,16 @@
+# PersistentVolumeClaim: asks the cluster for 1 GiB of disk that survives pod
+# restarts. Mounted at /app/models, so the model files are kept even when
+# pods are deleted. Kind's built-in "standard" storage class creates it.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: btc-models-pvc
+  labels:
+    app: btc-forecast-api
+spec:
+  accessModes:
+    - ReadWriteOnce   # fine on a single-node Kind cluster: all pods share the node
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 1Gi

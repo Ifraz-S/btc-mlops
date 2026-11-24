@@ -1,0 +1,9 @@
+# Libraries needed by the prediction API.
+# Versions are pinned so the model saved by Airflow (training) can always be
+# loaded by the API: scikit-learn models must be loaded with the same version.
+flask==3.1.0
+gunicorn==23.0.0
+numpy==1.26.4
+pandas==2.2.3
+scikit-learn==1.5.2
+joblib==1.4.2

@@ -1,0 +1,33 @@
+# Services give the pods one stable address and load-balance between them.
+# 1) ClusterIP: internal address, used by the Ingress and other pods.
+apiVersion: v1
+kind: Service
+metadata:
+  name: btc-forecast-api
+  labels:
+    app: btc-forecast-api
+spec:
+  type: ClusterIP
+  selector:
+    app: btc-forecast-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 5000
+---
+# 2) NodePort: reachable from your laptop at http://localhost:30080
+apiVersion: v1
+kind: Service
+metadata:
+  name: btc-forecast-api-nodeport
+  labels:
+    app: btc-forecast-api
+spec:
+  type: NodePort
+  selector:
+    app: btc-forecast-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 5000
+      nodePort: 30080

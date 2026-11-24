@@ -1,0 +1,4 @@
+# Everything needed to fetch data, train the model and run the API.
+-r app/requirements.txt
+yfinance>=0.2.54
+requests>=2.31
